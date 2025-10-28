@@ -3,6 +3,7 @@
     "version": ">= 16.25.0",
     "appVersionSource": "remote"
   },
+  
   "build": {
     "development": {
       "developmentClient": true,
@@ -12,10 +13,8 @@
       "distribution": "internal",
        "env": {
         "EXPO_NO_TELEMETRY": "1"
-      },
-      "hooks": {
-        "pre-install": "bash eas-build-pre-install.sh"
       }
+      
       
     },
     "production": {

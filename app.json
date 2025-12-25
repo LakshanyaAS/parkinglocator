@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "bolt-expo-nativewind",
-    "slug": "bolt-expo-nativewind",
+    "name": "parkinglocator",
+    "slug": "parkinglocator",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -20,20 +20,19 @@
       "expo-router",
       "expo-font",
       "expo-web-browser",
-      "expo-sqlite",
-      "./plugins/pin-gradle-version"
+      "expo-sqlite"
     ],
     "experiments": {
       "typedRoutes": true
     },
     "android": {
-      "package": "com.anonymous.boltexponativewind",
+      "package": "com.anonymous.parkinglocator",
       "edgeToEdgeEnabled": true
     },
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "75dca0bb-6b61-4205-907c-0a7a0ddc41ff"
+        "projectId": "a09f78a2-f415-47e4-894a-de3284863992"
       }
     }
   }

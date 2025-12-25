@@ -26,17 +26,17 @@ export default function HomeScreen() {
     }
   }, [state.vehicleLocation, state.currentLocation, state.path]);
 
-  const handleScanVehicle = () => {
-    router.push('/scanner');
-  };
+ const handleScanVehicle = () => {
+  router.push({ pathname: '/scanner', params: { mode: 'vehicle' } });
+};
 
-  const handleScanCurrent = () => {
-    if (!state.vehicleLocation) {
-      Alert.alert('Vehicle Location Required', 'Please scan your vehicle location first');
-      return;
-    }
-    router.push('/scanner');
-  };
+const handleScanCurrent = () => {
+  if (!state.vehicleLocation) {
+    Alert.alert('Vehicle Location Required', 'Please scan your vehicle first');
+    return;
+  }
+  router.push({ pathname: '/scanner', params: { mode: 'current' } });
+};
 
   const handleViewMap = () => {
     router.push('/map');
@@ -55,8 +55,8 @@ export default function HomeScreen() {
 
   const handleDemo = () => {
   
-    const vehicleNode = getNodeById('P1');
-    const currentNode = getNodeById('P11');
+    const vehicleNode = getNodeById('P6');
+    const currentNode = getNodeById('P13');
     
     if (vehicleNode && currentNode) {
       setVehicleLocation(vehicleNode);

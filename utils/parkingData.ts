@@ -5,9 +5,11 @@ import graphData from '@/graph.json';
 
 export const parkingNodes: ParkingNode[] = graphData.nodes.map((node: any) => ({
   id: node.id,
-  x: node.x,
-  y: node.y,
-  type: node.type as 'parking' | 'junction' | 'entrance'|'path',
+  x_px: node.x_px,
+  y_px: node.y_px,
+  x:node.x,
+  y:node.y,
+  type: node.type as 'parking' |  'entrance'|'path',
   qrCode: node.qrCode ?? undefined, 
 }));
 

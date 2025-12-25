@@ -2,15 +2,18 @@ import React, { createContext, useContext, useState, ReactNode } from 'react';
 
 export interface ParkingNode {
   id: string;
-  x: number;
-  y: number;
-  type: 'parking' | 'junction' | 'entrance'|'path'|null;
+  x_px: number;
+  y_px: number;
+  x:number;
+  y:number;
+  type: 'parking' | 'entrance'|'path'|null;
   qrCode: string|null;
 }
 
 export interface LocationState {
   vehicleLocation: ParkingNode | null;
   currentLocation: ParkingNode | null;
+  entranceLocation: ParkingNode | null;
   path: ParkingNode[];
   isScanning: boolean;
   scanType: 'vehicle' | 'current' | null;
@@ -44,6 +47,7 @@ export const LocationProvider: React.FC<LocationProviderProps> = ({ children }) 
   const [state, setState] = useState<LocationState>({
     vehicleLocation: null,
     currentLocation: null,
+    entranceLocation:null,
     path: [],
     isScanning: false,
     scanType: null,
@@ -73,6 +77,7 @@ export const LocationProvider: React.FC<LocationProviderProps> = ({ children }) 
     setState({
       vehicleLocation: null,
       currentLocation: null,
+      entranceLocation:null,
       path: [],
       isScanning: false,
       scanType: null,

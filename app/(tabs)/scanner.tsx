@@ -7,6 +7,7 @@ import { QrCode, X } from "lucide-react-native";
 import { Html5Qrcode } from "html5-qrcode"; // ✅ for web
 import { useLocation } from "@/contexts/LocationContext";
 import { getNodeByQRCode } from "@/utils/parkingData";
+import { useLocalSearchParams } from 'expo-router';
 
 export default function ScannerScreen() {
   const router = useRouter();
@@ -15,6 +16,8 @@ export default function ScannerScreen() {
   const [hasScanned, setHasScanned] = useState(false);
   const { state, setVehicleLocation, setCurrentLocation } = useLocation();
   const html5QrCodeRef = useRef<any>(null);
+  const params = useLocalSearchParams();
+  const mode = params.mode as 'vehicle' | 'current';
 
   // Request camera permission for mobile
   useEffect(() => {
@@ -57,56 +60,39 @@ export default function ScannerScreen() {
     }
   }, []);
 
-  const handleBarCodeScanned = ({ data }: { data: string }) => {
-    if (hasScanned) return;
-    setHasScanned(true);
+ const handleBarCodeScanned = ({ data }: { data: string }) => {
+  if (hasScanned) return;
+  setHasScanned(true);
 
-    const node = getNodeByQRCode(data);
+  const node = getNodeByQRCode(data);
 
-    if (!node) {
-      Alert.alert("Invalid QR Code", "This QR code is not recognized.", [
-        { text: "Try Again", onPress: () => setHasScanned(false) },
+  if (!node) {
+    Alert.alert("Invalid QR Code", "This QR code is not recognized.", [
+      { text: "Try Again", onPress: () => setHasScanned(false) },
+    ]);
+    return;
+  }
+
+  // REPLACE ENTIRE LOGIC WITH THIS:
+  if (mode === 'vehicle') {
+    setVehicleLocation(node);
+    Alert.alert("✅ Vehicle Location Set", `Parked at ${node.id}`, [
+      { text: "OK", onPress: () => router.back() },
+    ]);
+  } else if (mode === 'current') {
+    if (node.id === state.vehicleLocation?.id) {
+      Alert.alert("Same Location", "You are already at your vehicle.", [
+        { text: "OK", onPress: () => setHasScanned(false) },
       ]);
       return;
     }
-
-    if (!state.vehicleLocation) {
-      setVehicleLocation(node);
-      Alert.alert("Vehicle Location Set", `Set to ${node.id}`, [
-        { text: "OK", onPress: () => setHasScanned(false) },
-      ]);
-    } else if (!state.currentLocation) {
-      if (node.id === state.vehicleLocation.id) {
-        Alert.alert("Same Location", "You are already at your vehicle.", [
-          { text: "OK", onPress: () => setHasScanned(false) },
-        ]);
-        return;
-      }
-      setCurrentLocation(node);
-      Alert.alert("Current Location Set", `Set to ${node.id}`, [
-        { text: "View Map", onPress: () => router.push("/map") },
-        { text: "OK", onPress: () => router.push("/") },
-      ]);
-    } else {
-      Alert.alert("Update Location", "What would you like to update?", [
-        {
-          text: "Vehicle Location",
-          onPress: () => {
-            setVehicleLocation(node);
-            setHasScanned(false);
-          },
-        },
-        {
-          text: "Current Location",
-          onPress: () => {
-            setCurrentLocation(node);
-            setHasScanned(false);
-          },
-        },
-        { text: "Cancel", style: "cancel", onPress: () => setHasScanned(false) },
-      ]);
-    }
-  };
+    setCurrentLocation(node);
+    Alert.alert("✅ Current Location Set", `You are at ${node.id}`, [
+      { text: "View Map", onPress: () => router.push("/map") },
+      { text: "OK", onPress: () => router.back() },
+    ]);
+  }
+};
 
   if (Platform.OS !== "web" && !permission) {
     return (

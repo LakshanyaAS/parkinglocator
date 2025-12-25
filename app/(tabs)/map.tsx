@@ -1,111 +1,277 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect, useState, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, Dimensions, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Svg, Rect, Circle, Line,Path, Polygon, Text as SvgText, Defs, LinearGradient, Stop } from 'react-native-svg';
+import { Svg, Rect, Circle, Line, Path, Polygon, Text as SvgText, Defs, LinearGradient, Stop, G } from 'react-native-svg';
 import { useRouter } from 'expo-router';
 import { useLocation } from '@/contexts/LocationContext';
-import { parkingNodes,parkingEdges } from '@/utils/parkingData';
-import {generateDirections}  from '@/utils/astar';
-import { Navigation, Car, MapPin, ArrowLeft, Clock, Route, Zap } from 'lucide-react-native';
-import { Accelerometer } from 'expo-sensors';
-import { Platform } from 'react-native';
+import { parkingNodes } from '@/utils/parkingData';
+import { generateDirections } from '@/utils/astar';
+import { useRealSensors } from '@/hooks/useSensors';
+import { Navigation, Car, MapPin, ArrowLeft, Clock, Route, Zap, AlertTriangle, CheckCircle } from 'lucide-react-native';
 
 const { width } = Dimensions.get('window');
 const MAP_WIDTH = width - 32;
 const MAP_HEIGHT = 320;
+const PATH_DEVIATION_THRESHOLD = 25;
+
+// simple throttle helper (no external deps)
+const useThrottledValue = <T,>(value: T, intervalMs: number): T => {
+  const [throttled, setThrottled] = useState(value);
+  const last = useRef(0);
+
+  useEffect(() => {
+    const now = Date.now();
+    if (now - last.current >= intervalMs) {
+      last.current = now;
+      setThrottled(value);
+    }
+  }, [value, intervalMs]);
+
+  return throttled;
+};
 
 export default function MapScreen() {
   const router = useRouter();
   const { state } = useLocation();
-// Ensure this is a function call
-// --- Simulated movement offset based on device motion ---
-const [userOffset, setUserOffset] = React.useState({ x: 0, y: 0 });
+  const { heading, userOffset } = useRealSensors();
 
-React.useEffect(() => {
-  let subscription: { remove: () => void } | undefined;
+  const [userPosition, setUserPosition] = useState({ x: 0, y: 0 });
+  const [isOnPath, setIsOnPath] = useState(true);
+  const [closestPathIndex, setClosestPathIndex] = useState(0);
+  const [deviationDistance, setDeviationDistance] = useState(0);
 
+  const directions = state.path.length > 0 ? generateDirections(state.path) : [];
 
-  if (Platform.OS !== 'web') {
-    subscription = Accelerometer.addListener(({ x, y }) => {
-      const speed = 8; // adjust to control sensitivity
-      setUserOffset(prev => ({
-        x: prev.x + x * speed,
-        y: prev.y + y * speed,
-      }));
-    });
-    Accelerometer.setUpdateInterval(200);
-  }
+  // 1) SCALE & transform functions (memoized)
+  const { transformX, transformY, padding } = useMemo(() => {
+    const allNodes = parkingNodes;
+    if (allNodes.length === 0) {
+      return {
+        transformX: (x: number) => x,
+        transformY: (y: number) => y,
+        padding: 24,
+      };
+    }
 
-  return () => subscription && subscription.remove();
-}, []);
+    const xs = allNodes.map(n => n.x);
+    const ys = allNodes.map(n => n.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
 
+    const pad = 32;
+    const scaleX = (MAP_WIDTH - 2 * pad) / (maxX - minX || 1);
+    const scaleY = (MAP_HEIGHT - 2 * pad) / (maxY - minY || 1);
+    const scale = Math.min(scaleX, scaleY * 1.1);
 
+    const tx = (x: number) => (x - minX) * scale + pad;
+    const ty = (y: number) => (y - minY) * scale + pad;
 
-const directions: string[] = state.path.length > 0 && generateDirections
-    ? generateDirections(state.path)
-    : [];
+    return { transformX: tx, transformY: ty, padding: pad };
+  }, []);
 
+  // 2) Throttle sensor updates (e.g. 8 fps)
+  const throttledHeading = useThrottledValue(heading, 120);
+  const throttledOffset = useThrottledValue(userOffset, 120);
 
-  // Calculate scale factors based on node coordinates
-  const allNodes = parkingNodes;
-  const minX = Math.min(...allNodes.map(n => n.x));
-  const maxX = Math.max(...allNodes.map(n => n.x));
-  const minY = Math.min(...allNodes.map(n => n.y));
-  const maxY = Math.max(...allNodes.map(n => n.y));
-  
-  const padding = 40;
-  const scaleX = (MAP_WIDTH - 2 * padding) / (maxX - minX);
-  const scaleY = (MAP_HEIGHT - 2 * padding) / (maxY - minY);
-  const scale = Math.min(scaleX, scaleY * 1.1); // Slight Y-boost for horizontal paths
+  // 3) Update user position (lightweight)
+  useEffect(() => {
+    if (state.currentLocation) {
+      const sensorScale = 0.5;
+      setUserPosition({
+        x: transformX(state.currentLocation.x) + throttledOffset.x * sensorScale,
+        y: transformY(state.currentLocation.y) + throttledOffset.y * sensorScale,
+      });
+    }
+  }, [throttledOffset, state.currentLocation, transformX, transformY]);
 
-  const transformX = (x: number) => (x - minX) * scale + padding;
-  const transformY = (y: number) => (y - minY) * scale + padding;
+  const distanceToSegment = (
+    px: number, py: number,
+    x1: number, y1: number,
+    x2: number, y2: number
+  ) => {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const lengthSquared = dx * dx + dy * dy;
+    if (lengthSquared === 0) return Math.hypot(px - x1, py - y1);
+
+    let t = ((px - x1) * dx + (py - y1) * dy) / lengthSquared;
+    t = Math.max(0, Math.min(1, t));
+
+    const projX = x1 + t * dx;
+    const projY = y1 + t * dy;
+    return Math.hypot(px - projX, py - projY);
+  };
+
+  // 4) Precompute path points in pixel space (memo)
+  const pathPoints = useMemo(
+    () =>
+      state.path.map(node => ({
+        x: transformX(node.x),
+        y: transformY(node.y),
+      })),
+    [state.path, transformX, transformY]
+  );
+
+  // simple polyline path (no randomness)
+  const pathData = useMemo(() => {
+    if (pathPoints.length <= 1) return '';
+    let d = `M ${pathPoints[0].x} ${pathPoints[0].y}`;
+    for (let i = 1; i < pathPoints.length; i++) {
+      d += ` L ${pathPoints[i].x} ${pathPoints[i].y}`;
+    }
+    return d;
+  }, [pathPoints]);
+
+  // 5) On-path check using precomputed pathPoints
+  useEffect(() => {
+    if (pathPoints.length < 2) return;
+
+    let minDistance = Infinity;
+    let closestSegmentIndex = 0;
+
+    for (let i = 0; i < pathPoints.length - 1; i++) {
+      const p1 = pathPoints[i];
+      const p2 = pathPoints[i + 1];
+
+      const distance = distanceToSegment(
+        userPosition.x,
+        userPosition.y,
+        p1.x,
+        p1.y,
+        p2.x,
+        p2.y
+      );
+
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestSegmentIndex = i;
+      }
+    }
+
+    setDeviationDistance(minDistance);
+    setClosestPathIndex(closestSegmentIndex);
+    setIsOnPath(minDistance <= PATH_DEVIATION_THRESHOLD);
+  }, [userPosition, pathPoints]);
 
   const getStatusColor = () => {
     if (!state.vehicleLocation || !state.currentLocation) return '#9CA3AF';
-    return state.path.length > 0 ? '#10B981' : '#F59E0B';
+    if (state.path.length === 0) return '#F59E0B';
+    return isOnPath ? '#10B981' : '#EF4444';
   };
 
   const getStatusText = () => {
     if (!state.vehicleLocation) return 'Vehicle location not set';
     if (!state.currentLocation) return 'Current location not set';
     if (state.path.length === 0) return 'No path available';
-    return `${state.path.length - 1} steps to your vehicle`;
+
+    const remainingSteps = state.path.length - 1 - closestPathIndex;
+    if (!isOnPath) {
+      return `Off path - ${deviationDistance.toFixed(0)}px deviation`;
+    }
+    return `On track - ${Math.max(0, remainingSteps)} steps remaining`;
   };
 
-  // Function to calculate a simple control point for slight curve
-  const getControlPoint = (startX: number, startY: number, endX: number, endY: number, offset: number = 8) => {  // Reduced from 15 to 8
-  const midX = (startX + endX) / 2;
-  const midY = (startY + endY) / 2;
-  const dx = endX - startX;
-  const dy = endY - startY;
-  const length = Math.sqrt(dx * dx + dy * dy);
-  if (length < 20) return { x: midX, y: midY };  // Skip curve for very short segments to avoid over-waving
-  const nx = -dy / length * offset;
-  const ny = dx / length * offset;
-  return { x: midX + nx, y: midY + ny };
-};
+  // 6) Memoized static SVG parts (grid, parking, entrances)
+  const Grid = useMemo(
+    () => (
+      <G>
+        {[...Array(8)].map((_, i) => (
+          <Line
+            key={`grid-v-${i}`}
+            x1={padding + (i * (MAP_WIDTH - 2 * padding) / 7)}
+            y1={padding}
+            x2={padding + (i * (MAP_WIDTH - 2 * padding) / 7)}
+            y2={MAP_HEIGHT - padding}
+            stroke="#F1F5F9"
+            strokeWidth="1"
+          />
+        ))}
+        {[...Array(6)].map((_, i) => (
+          <Line
+            key={`grid-h-${i}`}
+            x1={padding}
+            y1={padding + (i * (MAP_HEIGHT - 2 * padding) / 5)}
+            x2={MAP_WIDTH - padding}
+            y2={padding + (i * (MAP_HEIGHT - 2 * padding) / 5)}
+            stroke="#F1F5F9"
+            strokeWidth="1"
+          />
+        ))}
+      </G>
+    ),
+    [padding]
+  );
 
-// Updated memoized path data for continuous path with optional subtle curves
-const pathData = useMemo(() => {
-  if (state.path.length <= 1) return '';
+  const ParkingAndEntrances = useMemo(
+    () => (
+      <G>
+        {parkingNodes
+          .filter(node => node.type === 'parking')
+          .map(node => {
+            const cx = transformX(node.x);
+            const cy = transformY(node.y);
+            return (
+              <G key={node.id}>
+                <Rect
+                  x={cx - 16}
+                  y={cy - 10}
+                  width={32}
+                  height={20}
+                  fill={state.vehicleLocation?.id === node.id ? '#EF4444' : '#FFFFFF'}
+                  stroke={state.vehicleLocation?.id === node.id ? '#DC2626' : '#CBD5E1'}
+                  strokeWidth={2}
+                  rx={4}
+                />
+                <SvgText
+                  x={cx}
+                  y={cy + 2}
+                  fontSize={10}
+                  fontWeight="600"
+                  fill={state.vehicleLocation?.id === node.id ? '#FFFFFF' : '#475569'}
+                  textAnchor="middle"
+                >
+                  {node.id}
+                </SvgText>
+              </G>
+            );
+          })}
 
-  const points = state.path.map(node => ({ x: transformX(node.x), y: transformY(node.y) }));
-  let d = `M ${points[0].x} ${points[0].y}`; // Start at first point
-
-  for (let i = 0; i < points.length - 1; i++) {
-    const start = points[i];
-    const end = points[i + 1];
-    if (i > 0 && Math.random() > 0.3) {  // Add subtle curve only ~70% of segments for natural variation
-      const { x: cx, y: cy } = getControlPoint(start.x, start.y, end.x, end.y);
-      d += ` Q ${cx} ${cy}, ${end.x} ${end.y}`;
-    } else {
-      d += ` L ${end.x} ${end.y}`; // Straight line for continuity
-    }
-  }
-
-  return d;
-}, [state.path, transformX, transformY]);
+        {parkingNodes
+          .filter(node => node.type === 'entrance')
+          .map(node => {
+            const ex = transformX(node.x);
+            const ey = transformY(node.y);
+            return (
+              <G key={node.id}>
+                <Rect
+                  x={ex - 20}
+                  y={ey - 8}
+                  width={40}
+                  height={16}
+                  fill="#F59E0B"
+                  stroke="#D97706"
+                  strokeWidth={2}
+                  rx={8}
+                />
+                <SvgText
+                  x={ex}
+                  y={ey + 2}
+                  fontSize={8}
+                  fontWeight="600"
+                  fill="#FFFFFF"
+                  textAnchor="middle"
+                >
+                  ENTRANCE
+                </SvgText>
+              </G>
+            );
+          })}
+      </G>
+    ),
+    [transformX, transformY, state.vehicleLocation]
+  );
 
   return (
     <SafeAreaView style={styles.container}>
@@ -128,19 +294,17 @@ const pathData = useMemo(() => {
           <View style={styles.statusHeader}>
             <View style={[styles.statusIndicator, { backgroundColor: getStatusColor() }]} />
             <Text style={styles.statusTitle}>Navigation Status</Text>
+            {state.path.length > 0 &&
+              (isOnPath ? (
+                <CheckCircle size={20} color="#10B981" style={{ marginLeft: 8 }} />
+              ) : (
+                <AlertTriangle size={20} color="#EF4444" style={{ marginLeft: 8 }} />
+              ))}
           </View>
           <Text style={styles.statusText}>{getStatusText()}</Text>
-          {state.vehicleLocation && state.currentLocation && (
-            <View style={styles.routeInfo}>
-              <Route size={16} color="#6B7280" />
-              <Text style={styles.routeText}>
-                From {state.currentLocation.id} to {state.vehicleLocation.id}
-              </Text>
-            </View>
-          )}
         </View>
 
-        {/* Map Container */}
+        {/* Map */}
         <View style={styles.mapContainer}>
           <View style={styles.mapHeader}>
             <Text style={styles.mapTitle}>Parking Layout</Text>
@@ -156,186 +320,129 @@ const pathData = useMemo(() => {
             <Svg width={MAP_WIDTH} height={MAP_HEIGHT} style={styles.map}>
               <Defs>
                 <LinearGradient id="pathGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                  <Stop offset="0%" stopColor="#EF4444" stopOpacity="0.8" />
-                  <Stop offset="100%" stopColor="#DC2626" stopOpacity="1" />
+                  <Stop offset="0%" stopColor="#EF4444" stopOpacity={0.8} />
+                  <Stop offset="100%" stopColor="#DC2626" stopOpacity={1} />
                 </LinearGradient>
               </Defs>
 
-              {/* Background */}
               <Rect
-                x="0"
-                y="0"
+                x={0}
+                y={0}
                 width={MAP_WIDTH}
                 height={MAP_HEIGHT}
                 fill="#F8FAFC"
                 stroke="#E2E8F0"
-                strokeWidth="2"
-                rx="12"
+                strokeWidth={2}
+                rx={12}
               />
 
-              {/* Grid pattern */}
-              {[...Array(8)].map((_, i) => (
-                <Line
-                  key={`grid-v-${i}`}
-                  x1={padding + (i * (MAP_WIDTH - 2 * padding) / 7)}
-                  y1={padding}
-                  x2={padding + (i * (MAP_WIDTH - 2 * padding) / 7)}
-                  y2={MAP_HEIGHT - padding}
-                  stroke="#F1F5F9"
-                  strokeWidth="1"
-                />
-              ))}
-              {[...Array(6)].map((_, i) => (
-                <Line
-                  key={`grid-h-${i}`}
-                  x1={padding}
-                  y1={padding + (i * (MAP_HEIGHT - 2 * padding) / 5)}
-                  x2={MAP_WIDTH - padding}
-                  y2={padding + (i * (MAP_HEIGHT - 2 * padding) / 5)}
-                  stroke="#F1F5F9"
-                  strokeWidth="1"
-                />
-              ))}
-                        
+              {Grid}
+              {ParkingAndEntrances}
 
-
-              {/* Parking spaces */}
-              {parkingNodes
-                .filter(node => node.type === 'parking')
-                .map(node => {
-                  const isVehicleHere = state.vehicleLocation?.id === node.id;
-                  return (
-                    <g key={node.id}>
-                      <Rect
-                        x={transformX(node.x) - 16}
-                        y={transformY(node.y) - 10}
-                        width="32"
-                        height="20"
-                        fill={isVehicleHere ? '#EF4444' : '#FFFFFF'}
-                        stroke={isVehicleHere ? '#DC2626' : '#CBD5E1'}
-                        strokeWidth="2"
-                        rx="4"
-                      />
-                      <SvgText
-                        x={transformX(node.x)}
-                        y={transformY(node.y) + 2}
-                        fontSize="10"
-                        fontWeight="600"
-                        fill={isVehicleHere ? '#FFFFFF' : '#475569'}
-                        textAnchor="middle"
-                      >
-                        {node.id}
-                      </SvgText>
-                    </g>
-                  );
-                })}
-
-              {/* Continuous path with slight curves */}
-              {state.path.length > 1 && (
+              {pathData !== '' && (
                 <Path
                   d={pathData}
                   fill="none"
                   stroke="url(#pathGradient)"
-                  strokeWidth="4"
+                  strokeWidth={4}
                   strokeLinecap="round"
                 />
               )}
 
-              {/* Path dots for better visibility */}
-              {state.path.map((node, index) => (
-                <Circle
-                  key={`path-dot-${index}`}
-                  cx={transformX(node.x)}
-                  cy={transformY(node.y)}
-                  r="3"
-                  fill="#DC2626"
-                  stroke="#FFFFFF"
-                  strokeWidth="2"
-                />
-              ))}
-              
+              {pathPoints.map((p, index) => {
+                const isPassed = index <= closestPathIndex;
+                return (
+                  <Circle
+                    key={`path-dot-${index}`}
+                    cx={p.x}
+                    cy={p.y}
+                    r={3}
+                    fill={isPassed ? '#10B981' : '#DC2626'}
+                    stroke="#FFFFFF"
+                    strokeWidth={2}
+                  />
+                );
+              })}
 
-              {/* Current location marker */}
-              {/* Current location marker with movement */}
-{state.currentLocation && (
-  <g>
-    <Circle
-      cx={transformX(state.currentLocation.x) + userOffset.x}
-      cy={transformY(state.currentLocation.y) + userOffset.y}
-      r="12"
-      fill="#10B981"
-      stroke="#FFFFFF"
-      strokeWidth="3"
-    />
-    <Circle
-      cx={transformX(state.currentLocation.x) + userOffset.x}
-      cy={transformY(state.currentLocation.y) + userOffset.y}
-      r="6"
-      fill="#FFFFFF"
-    />
-    <SvgText
-      x={transformX(state.currentLocation.x) + userOffset.x}
-      y={transformY(state.currentLocation.y) + userOffset.y - 20}
-      fontSize="10"
-      fontWeight="700"
-      fill="#10B981"
-      textAnchor="middle"
-    >
-      YOU
-    </SvgText>
-  </g>
-)}
+              {state.currentLocation && state.path.length > 0 && (
+                <G>
+                  <Circle
+                    cx={userPosition.x}
+                    cy={userPosition.y}
+                    r={14}
+                    fill={isOnPath ? '#10B981' : '#F59E0B'}
+                    fillOpacity={0.3}
+                  />
+                  <Circle
+                    cx={userPosition.x}
+                    cy={userPosition.y}
+                    r={8}
+                    fill={isOnPath ? '#10B981' : '#F59E0B'}
+                    stroke="#FFFFFF"
+                    strokeWidth={3}
+                  />
+                  <Circle cx={userPosition.x} cy={userPosition.y} r={3} fill="#FFFFFF" />
+                  <Line
+                    x1={userPosition.x}
+                    y1={userPosition.y}
+                    x2={userPosition.x + Math.cos((throttledHeading * Math.PI) / 180) * 15}
+                    y2={userPosition.y + Math.sin((throttledHeading * Math.PI) / 180) * 15}
+                    stroke="#FFFFFF"
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                  />
+                </G>
+              )}
 
+              {state.currentLocation && (
+                <G>
+                  <Circle
+                    cx={transformX(state.currentLocation.x)}
+                    cy={transformY(state.currentLocation.y)}
+                    r={6}
+                    fill="#3B82F6"
+                    stroke="#FFFFFF"
+                    strokeWidth={2}
+                  />
+                  <SvgText
+                    x={transformX(state.currentLocation.x)}
+                    y={transformY(state.currentLocation.y) - 12}
+                    fontSize={9}
+                    fontWeight="700"
+                    fill="#3B82F6"
+                    textAnchor="middle"
+                  >
+                    START
+                  </SvgText>
+                </G>
+              )}
 
-              {/* Vehicle location marker */}
               {state.vehicleLocation && (
-                <g>
+                <G>
                   <Polygon
-                    points={`${transformX(state.vehicleLocation.x) - 8},${transformY(state.vehicleLocation.y) - 10} ${transformX(state.vehicleLocation.x)},${transformY(state.vehicleLocation.y) + 10} ${transformX(state.vehicleLocation.x) + 8},${transformY(state.vehicleLocation.y) - 10}`}
+                    points={`${transformX(state.vehicleLocation.x) - 8},${transformY(
+                      state.vehicleLocation.y
+                    ) - 10} ${transformX(state.vehicleLocation.x)},${transformY(
+                      state.vehicleLocation.y
+                    ) + 10} ${transformX(state.vehicleLocation.x) + 8},${transformY(
+                      state.vehicleLocation.y
+                    ) - 10}`}
                     fill="#EF4444"
                     stroke="#FFFFFF"
-                    strokeWidth="3"
+                    strokeWidth={3}
                   />
                   <SvgText
                     x={transformX(state.vehicleLocation.x)}
                     y={transformY(state.vehicleLocation.y) - 18}
-                    fontSize="10"
+                    fontSize={10}
                     fontWeight="700"
-                    fill="#4444efff"
+                    fill="#EF4444"
                     textAnchor="middle"
                   >
                     CAR
                   </SvgText>
-                </g>
+                </G>
               )}
-
-              {/* Entrance markers */}
-              {parkingNodes
-                .filter(node => node.type === 'entrance')
-                .map(node => (
-                  <g key={node.id}>
-                    <Rect
-                      x={transformX(node.x) - 20}
-                      y={transformY(node.y) - 8}
-                      width="40"
-                      height="16"
-                      fill="#F59E0B"
-                      stroke="#D97706"
-                      strokeWidth="2"
-                      rx="8"
-                    />
-                    <SvgText
-                      x={transformX(node.x)}
-                      y={transformY(node.y) + 2}
-                      fontSize="8"
-                      fontWeight="600"
-                      fill="#FFFFFF"
-                      textAnchor="middle"
-                    >
-                      ENTRANCE
-                    </SvgText>
-                  </g>
-                ))}
             </Svg>
           </View>
         </View>
@@ -350,11 +457,11 @@ const pathData = useMemo(() => {
             </View>
             <View style={styles.legendItem}>
               <View style={[styles.legendIcon, styles.legendYou]} />
-              <Text style={styles.legendText}>Your Location</Text>
+              <Text style={styles.legendText}>Live Position</Text>
             </View>
             <View style={styles.legendItem}>
-              <View style={[styles.legendIcon, styles.legendEntrance]} />
-              <Text style={styles.legendText}>Entrance</Text>
+              <View style={[styles.legendIcon, styles.legendStart]} />
+              <Text style={styles.legendText}>Start Point</Text>
             </View>
             <View style={styles.legendItem}>
               <View style={[styles.legendIcon, styles.legendPath]} />
@@ -373,14 +480,34 @@ const pathData = useMemo(() => {
               <Text style={styles.directionsTitle}>Step-by-Step Directions</Text>
             </View>
             <View style={styles.directionsList}>
-              {directions.map((direction, index) => (
-                <View key={index} style={styles.directionItem}>
-                  <View style={styles.stepBadge}>
-                    <Text style={styles.stepNumber}>{index + 1}</Text>
+              {directions.map((direction, index) => {
+                const isCurrentStep = index === closestPathIndex;
+                const isPassed = index < closestPathIndex;
+                return (
+                  <View 
+                    key={index} 
+                    style={[
+                      styles.directionItem,
+                      isCurrentStep && styles.currentStep,
+                      isPassed && styles.passedStep
+                    ]}
+                  >
+                    <View style={[
+                      styles.stepBadge,
+                      isCurrentStep && styles.currentStepBadge,
+                      isPassed && styles.passedStepBadge
+                    ]}>
+                      <Text style={styles.stepNumber}>{index + 1}</Text>
+                    </View>
+                    <Text style={[
+                      styles.directionText,
+                      isPassed && styles.passedDirectionText
+                    ]}>
+                      {direction}
+                    </Text>
                   </View>
-                  <Text style={styles.directionText}>{direction}</Text>
-                </View>
-              ))}
+                );
+              })}
             </View>
           </View>
         )}
@@ -394,14 +521,11 @@ const pathData = useMemo(() => {
             </View>
             <Text style={styles.emptyStateTitle}>Ready to Navigate?</Text>
             <Text style={styles.emptyStateText}>
-              Set your vehicle and current locations to see the optimal path on this interactive map.
+              Set your vehicle and current locations to see the optimal path with real-time tracking.
             </Text>
             <TouchableOpacity 
               style={styles.demoButton}
-              onPress={() => {
-                router.push('/');
-                // The demo will be triggered from the home screen
-              }}
+              onPress={() => router.push('/')}
             >
               <Text style={styles.demoButtonText}>Try Demo Mode</Text>
             </TouchableOpacity>
@@ -497,11 +621,23 @@ const styles = StyleSheet.create({
   routeInfo: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginBottom: 8,
   },
   routeText: {
     fontSize: 14,
     color: '#64748B',
     marginLeft: 6,
+  },
+  sensorInfo: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+  },
+  sensorText: {
+    fontSize: 12,
+    color: '#94A3B8',
+    fontFamily: 'monospace',
   },
   mapContainer: {
     backgroundColor: '#FFFFFF',
@@ -586,6 +722,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#10B981',
     borderRadius: 8,
   },
+  legendStart: {
+    backgroundColor: '#3B82F6',
+    borderRadius: 8,
+  },
   legendEntrance: {
     backgroundColor: '#F59E0B',
     borderRadius: 8,
@@ -637,6 +777,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     marginBottom: 16,
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: '#F8FAFC',
+  },
+  currentStep: {
+    backgroundColor: '#DBEAFE',
+    borderWidth: 2,
+    borderColor: '#3B82F6',
+  },
+  passedStep: {
+    opacity: 0.5,
   },
   stepBadge: {
     width: 28,
@@ -646,6 +797,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 16,
+  },
+  currentStepBadge: {
+    backgroundColor: '#10B981',
+  },
+  passedStepBadge: {
+    backgroundColor: '#94A3B8',
   },
   stepNumber: {
     fontSize: 12,
@@ -658,6 +815,9 @@ const styles = StyleSheet.create({
     color: '#374151',
     lineHeight: 22,
     paddingTop: 2,
+  },
+  passedDirectionText: {
+    textDecorationLine: 'line-through',
   },
   emptyState: {
     alignItems: 'center',
@@ -695,3 +855,4 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
 });
+

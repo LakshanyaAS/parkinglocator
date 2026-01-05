@@ -55,8 +55,8 @@ const handleScanCurrent = () => {
 
   const handleDemo = () => {
   
-    const vehicleNode = getNodeById('P6');
-    const currentNode = getNodeById('P13');
+    const vehicleNode = getNodeById('P15');
+    const currentNode = getNodeById('P4');
     
     if (vehicleNode && currentNode) {
       setVehicleLocation(vehicleNode);
@@ -64,7 +64,7 @@ const handleScanCurrent = () => {
       
       Alert.alert(
         'Demo Mode Activated',
-        'Vehicle set at P4, Current location at J7. Path calculated!',
+        'Vehicle set at ${vehicleNode.id}, Current location at ${currentNode.id}. Path calculated!',
         [
           { text: 'View Map', onPress: () => router.push('/map') },
           { text: 'OK' },
@@ -119,7 +119,7 @@ const handleScanCurrent = () => {
               <Text style={styles.pathTitle}>Path Found</Text>
             </View>
             <Text style={styles.pathText}>
-              {state.path.length } steps to your vehicle
+              {directions.length-1 } steps to your vehicle
             </Text>
             <Text style={styles.pathSubtext}>
               Path: {state.path.map(node => node.id).join(' → ')}

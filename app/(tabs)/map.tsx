@@ -166,7 +166,7 @@ export default function MapScreen() {
     if (!state.currentLocation) return 'Current location not set';
     if (state.path.length === 0) return 'No path available';
 
-    const remainingSteps = state.path.length - 1 - closestPathIndex;
+    const remainingSteps = directions.length - 1 - closestPathIndex;
     if (!isOnPath) {
       return `Off path - ${deviationDistance.toFixed(0)}px deviation`;
     }

@@ -9,7 +9,7 @@ export const parkingNodes: ParkingNode[] = graphData.nodes.map((node: any) => ({
   y_px: node.y_px,
   x:node.x,
   y:node.y,
-  type: node.type as 'parking' |  'entrance'|'path',
+  type: node.type as 'parking' |  'entrance'|'path'|'connection',
   qrCode: node.qrCode ?? undefined, 
 }));
 

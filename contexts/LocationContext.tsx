@@ -6,7 +6,7 @@ export interface ParkingNode {
   y_px: number;
   x:number;
   y:number;
-  type: 'parking' | 'entrance'|'path'|null;
+  type: 'parking' | 'entrance'|'path'|'connection'|null;
   qrCode: string|null;
 }
 

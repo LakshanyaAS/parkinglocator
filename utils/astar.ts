@@ -101,37 +101,75 @@ export const findShortestPath = (start: ParkingNode, goal: ParkingNode): Parking
   return [];
 };
 
+type Heading = 'north' | 'east' | 'south' | 'west';
 
-export const generateDirections = (path: ParkingNode[]): string[] => {
-  if (path.length <= 1) {
-    return ['You are at your destination'];
+const headingToAngle: Record<Heading, number> = {
+  north: 0,
+  east: 90,
+  south: 180,
+  west: 270,
+};
+
+const getHeadingFromVector = (dx: number, dy: number): Heading => {
+  if (Math.abs(dx) > Math.abs(dy)) {
+    return dx > 0 ? 'east' : 'west';
+  } else {
+    return dy > 0 ? 'south' : 'north';
   }
-  
-  const directions: string[] = [];
-  
+};
+
+export const generateDirections = (
+  path: ParkingNode[],
+  startHeading: Heading = 'north'
+): string[] => {
+  if (path.length <= 1) return ['You are at your destination'];
+
+  const steps: string[] = [];
+  let currentHeading = startHeading;
+
+  let lastInstruction: string | null = null;
+
   for (let i = 0; i < path.length - 1; i++) {
     const current = path[i];
     const next = path[i + 1];
-    
-    if (current.type === 'entrance') {
-      directions.push('Start from the main entrance');
-    } else if (next.type === 'parking') {
-      directions.push(`Head to parking spot ${next.id}`);
+
+    const dx = next.x - current.x;
+    const dy = next.y - current.y;
+
+    const movementHeading = getHeadingFromVector(dx, dy);
+
+    // convert to angles
+    const currentAngle = headingToAngle[currentHeading];
+    const moveAngle = headingToAngle[movementHeading];
+
+    let diff = (moveAngle - currentAngle + 360) % 360;
+
+    let instruction = '';
+
+    if (i === 0) {
+      // FIRST STEP IS ALWAYS STRAIGHT
+      instruction = 'Walk straight';
+    } else if (diff === 0) {
+      instruction = 'Walk straight';
+    } else if (diff === 90) {
+      instruction = 'Turn right';
+    } else if (diff === 270) {
+      instruction = 'Turn left';
     } else {
-      const dx = next.x - current.x;
-      const dy = next.y - current.y;
-      
-      let direction = '';
-      if (Math.abs(dx) > Math.abs(dy)) {
-        direction = dx > 0 ? 'east' : 'west';
-      } else {
-        direction = dy > 0 ? 'south' : 'north';
-      }
-      
-      directions.push(`Walk ${direction} towards ${next.id}`);
+      instruction = 'Turn around';
     }
+
+    // MERGE repeated "Walk straight"
+    if (instruction === 'Walk straight' && lastInstruction === 'Walk straight') {
+      // skip adding duplicate
+    } else {
+      steps.push(instruction);
+      lastInstruction = instruction;
+    }
+
+    currentHeading = movementHeading;
   }
-  
-  directions.push('You have arrived at your destination!');
-  return directions;
+
+  steps.push('You have arrived at your destination!');
+  return steps;
 };

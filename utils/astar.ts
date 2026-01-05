@@ -118,58 +118,73 @@ const getHeadingFromVector = (dx: number, dy: number): Heading => {
   }
 };
 
-export const generateDirections = (
-  path: ParkingNode[],
-  startHeading: Heading = 'north'
-): string[] => {
-  if (path.length <= 1) return ['You are at your destination'];
-
-  const steps: string[] = [];
-  let currentHeading = startHeading;
-
-  let lastInstruction: string | null = null;
-
-  for (let i = 0; i < path.length - 1; i++) {
-    const current = path[i];
-    const next = path[i + 1];
-
-    const dx = next.x - current.x;
-    const dy = next.y - current.y;
-
-    const movementHeading = getHeadingFromVector(dx, dy);
-
-    // convert to angles
-    const currentAngle = headingToAngle[currentHeading];
-    const moveAngle = headingToAngle[movementHeading];
-
-    let diff = (moveAngle - currentAngle + 360) % 360;
-
-    let instruction = '';
-
-    if (i === 0) {
-      // FIRST STEP IS ALWAYS STRAIGHT
-      instruction = 'Walk straight';
-    } else if (diff === 0) {
-      instruction = 'Walk straight';
-    } else if (diff === 90) {
-      instruction = 'Turn right';
-    } else if (diff === 270) {
-      instruction = 'Turn left';
-    } else {
-      instruction = 'Turn around';
-    }
-
-    // MERGE repeated "Walk straight"
-    if (instruction === 'Walk straight' && lastInstruction === 'Walk straight') {
-      // skip adding duplicate
-    } else {
-      steps.push(instruction);
-      lastInstruction = instruction;
-    }
-
-    currentHeading = movementHeading;
+export const generateDirections = (path: ParkingNode[]): string[] => {
+  if (!path || path.length < 2) {
+    return ["You are at your destination"];
   }
 
-  steps.push('You have arrived at your destination!');
+  const steps: string[] = [];
+
+  const getDir = (a: ParkingNode, b: ParkingNode) => {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+
+    if (Math.abs(dx) > Math.abs(dy)) {
+      return dx > 0 ? "E" : "W";
+    }
+    return dy > 0 ? "S" : "N";
+  };
+
+  const getTurn = (from: string, to: string) => {
+    const dirs = ["N", "E", "S", "W"];
+    const i1 = dirs.indexOf(from);
+    const i2 = dirs.indexOf(to);
+
+    if (i1 === i2) return "straight";
+    if ((i1 + 1) % 4 === i2) return "right";
+    if ((i1 + 3) % 4 === i2) return "left";
+    return "back";
+  };
+
+  const dist = (a: ParkingNode, b: ParkingNode) => {
+    return Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
+  };
+
+  let prevDir: string | null = null;
+  let accumulated = 0;
+
+  for (let i = 0; i < path.length - 1; i++) {
+    const dir = getDir(path[i], path[i + 1]);
+    const d = dist(path[i], path[i + 1]);
+
+    if (prevDir === null) {
+      prevDir = dir;
+      accumulated += d;
+      continue;
+    }
+
+    const turn = getTurn(prevDir, dir);
+
+    if (turn === "straight") {
+      accumulated += d;
+    } else {
+      // finish previous straight instruction
+      steps.push(
+        `Walk straight for ${accumulated.toFixed(1)} m`
+      );
+
+      if (turn === "left") steps.push("Turn left");
+      if (turn === "right") steps.push("Turn right");
+      if (turn === "back") steps.push("Turn around");
+
+      accumulated = d;
+      prevDir = dir;
+    }
+  }
+
+  // final straight segment
+  steps.push(`Walk straight for ${accumulated.toFixed(1)} m`);
+  steps.push("You have arrived at your destination!");
+
   return steps;
 };

@@ -7,13 +7,20 @@ import { QrCode, X } from "lucide-react-native";
 import { Html5Qrcode } from "html5-qrcode"; // ✅ for web
 import { useLocation } from "@/contexts/LocationContext";
 import { getNodeByQRCode } from "@/utils/parkingData";
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams,useFocusEffect } from 'expo-router';
 
 export default function ScannerScreen() {
   const router = useRouter();
   const [permission, requestPermission] = useCameraPermissions();
   const [facing] = useState<CameraType>("back");
   const [hasScanned, setHasScanned] = useState(false);
+
+
+useFocusEffect(
+  React.useCallback(() => {
+    setHasScanned(false);
+  }, [])
+);
   const { state, setVehicleLocation, setCurrentLocation } = useLocation();
   const html5QrCodeRef = useRef<any>(null);
   const params = useLocalSearchParams();
@@ -50,6 +57,11 @@ export default function ScannerScreen() {
             .catch((err: any) => console.error("QR start failed:", err));
         }
       });
+      useFocusEffect(
+  React.useCallback(() => {
++   setHasScanned(false);
+  }, [])
+);
 
       return () => {
         if (html5QrCodeRef.current) {
@@ -73,7 +85,7 @@ export default function ScannerScreen() {
     return;
   }
 
-  // REPLACE ENTIRE LOGIC WITH THIS:
+  
   if (mode === 'vehicle') {
     setVehicleLocation(node);
     Alert.alert("✅ Vehicle Location Set", `Parked at ${node.id}`, [

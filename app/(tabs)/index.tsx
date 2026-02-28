@@ -1,20 +1,103 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Car, MapPin, Navigation, RotateCcw, Play } from 'lucide-react-native';
-import { useLocation } from '@/contexts/LocationContext';
-import { findShortestPath, generateDirections } from '@/utils/astar';
+import { ParkingNode, useLocation } from '@/contexts/LocationContext';
+import { findShortestPathOnGraph, findShortestPathWithStats, generateDirections } from '@/utils/astar';
 import { getNodeById } from '@/utils/parkingData';
 
 export default function HomeScreen() {
+  const nowMs = () =>
+    typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? performance.now()
+      : Date.now();
   const router = useRouter();
   const { state, setPath, reset, setVehicleLocation, setCurrentLocation } = useLocation();
+  const [lastPathMs, setLastPathMs] = useState<number | null>(null);
+  const [benchStats, setBenchStats] = useState<{
+    iterations: number;
+    avgMs: number;
+    p50Ms: number;
+    p95Ms: number;
+  } | null>(null);
+  const [bigBenchStats, setBigBenchStats] = useState<{
+    iterations: number;
+    avgMs: number;
+    p50Ms: number;
+    p95Ms: number;
+    nodes: number;
+  } | null>(null);
+
+  const bigGraph = useMemo(() => {
+    const width = 80;
+    const height = 80;
+    const nodesById = new Map<string, ParkingNode>();
+    const edges: { [key: string]: string[] } = {};
+
+    const idFor = (x: number, y: number) => `G${x}_${y}`;
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const id = idFor(x, y);
+        nodesById.set(id, {
+          id,
+          x,
+          y,
+          x_px: x,
+          y_px: y,
+          type: 'path',
+        });
+        edges[id] = [];
+      }
+    }
+
+    const link = (a: string, b: string) => {
+      edges[a].push(b);
+      edges[b].push(a);
+    };
+
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const id = idFor(x, y);
+        if (x + 1 < width) link(id, idFor(x + 1, y));
+        if (y + 1 < height) link(id, idFor(x, y + 1));
+      }
+    }
+
+    const start = nodesById.get(idFor(0, 0))!;
+    const goal = nodesById.get(idFor(width - 1, height - 1))!;
+    const getNode = (id: string) => nodesById.get(id) ?? null;
+    return { start, goal, edges, getNode, nodes: nodesById.size };
+  }, []);
 
   
   useEffect(() => {
     if (state.vehicleLocation && state.currentLocation) {
-      const newPath = findShortestPath(state.currentLocation, state.vehicleLocation);
+      const { path: newPath, durationMs } = findShortestPathWithStats(
+        state.currentLocation,
+        state.vehicleLocation
+      );
+      setLastPathMs(durationMs);
+
+      const iterations = 50;
+      const samples: number[] = [];
+      for (let i = 0; i < iterations; i += 1) {
+        const { durationMs: ms } = findShortestPathWithStats(
+          state.currentLocation,
+          state.vehicleLocation
+        );
+        samples.push(ms);
+      }
+      samples.sort((a, b) => a - b);
+      const avgMs = samples.reduce((acc, v) => acc + v, 0) / samples.length;
+      const p50Ms = samples[Math.floor(0.5 * (samples.length - 1))];
+      const p95Ms = samples[Math.floor(0.95 * (samples.length - 1))];
+      setBenchStats({ iterations, avgMs, p50Ms, p95Ms });
+      console.log(
+        `[path-bench] n=${iterations} avg=${avgMs.toFixed(2)}ms p50=${p50Ms.toFixed(
+          2
+        )}ms p95=${p95Ms.toFixed(2)}ms`
+      );
 
       const isDifferent =
         newPath.length !== state.path.length ||
@@ -25,6 +108,27 @@ export default function HomeScreen() {
       }
     }
   }, [state.vehicleLocation, state.currentLocation, state.path]);
+
+  useEffect(() => {
+    const iterations = 30;
+    const samples: number[] = [];
+    for (let i = 0; i < iterations; i += 1) {
+      const t0 = nowMs();
+      findShortestPathOnGraph(bigGraph.start, bigGraph.goal, bigGraph.edges, bigGraph.getNode);
+      const t1 = nowMs();
+      samples.push(t1 - t0);
+    }
+    samples.sort((a, b) => a - b);
+    const avgMs = samples.reduce((acc, v) => acc + v, 0) / samples.length;
+    const p50Ms = samples[Math.floor(0.5 * (samples.length - 1))];
+    const p95Ms = samples[Math.floor(0.95 * (samples.length - 1))];
+    setBigBenchStats({ iterations, avgMs, p50Ms, p95Ms, nodes: bigGraph.nodes });
+    console.log(
+      `[big-graph-bench] nodes=${bigGraph.nodes} n=${iterations} avg=${avgMs.toFixed(
+        2
+      )}ms p50=${p50Ms.toFixed(2)}ms p95=${p95Ms.toFixed(2)}ms`
+    );
+  }, [bigGraph]);
 
  const handleScanVehicle = () => {
   router.push({ pathname: '/scanner', params: { mode: 'vehicle' } });
@@ -124,6 +228,25 @@ const handleScanCurrent = () => {
             <Text style={styles.pathSubtext}>
               Path: {state.path.map(node => node.id).join(' → ')}
             </Text>
+            {lastPathMs !== null && (
+              <Text style={styles.pathSubtext}>
+                Computation: {lastPathMs.toFixed(2)} ms
+              </Text>
+            )}
+            {benchStats && (
+              <Text style={styles.pathSubtext}>
+                Benchmark (n={benchStats.iterations}): avg {benchStats.avgMs.toFixed(2)}
+                ms, p50 {benchStats.p50Ms.toFixed(2)} ms, p95{' '}
+                {benchStats.p95Ms.toFixed(2)} ms
+              </Text>
+            )}
+            {bigBenchStats && (
+              <Text style={styles.pathSubtext}>
+                Big Graph ({bigBenchStats.nodes} nodes, n={bigBenchStats.iterations}): avg{' '}
+                {bigBenchStats.avgMs.toFixed(2)} ms, p50 {bigBenchStats.p50Ms.toFixed(2)} ms,
+                p95 {bigBenchStats.p95Ms.toFixed(2)} ms
+              </Text>
+            )}
           </View>
         )}
 

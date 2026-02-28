@@ -1,6 +1,8 @@
 import { ParkingNode } from '@/contexts/LocationContext';
 import { parkingNodes, parkingEdges, getNodeById } from './parkingData';
 
+export type GraphEdges = { [key: string]: string[] };
+
 interface AStarNode {
   node: ParkingNode;
   gScore: number; 
@@ -17,14 +19,19 @@ const calculateDistance = (node1: ParkingNode, node2: ParkingNode): number => {
 };
 
 
-export const findShortestPath = (start: ParkingNode, goal: ParkingNode): ParkingNode[] => {
+export const findShortestPathOnGraph = (
+  start: ParkingNode,
+  goal: ParkingNode,
+  edges: GraphEdges,
+  getNodeByIdLocal: (id: string) => ParkingNode | null
+): ParkingNode[] => {
   if (start.id === goal.id) {
     return [start];
   }
 
   const openSet: AStarNode[] = [];
   const closedSet: Set<string> = new Set();
-  
+
   const startAStarNode: AStarNode = {
     node: start,
     gScore: 0,
@@ -32,48 +39,45 @@ export const findShortestPath = (start: ParkingNode, goal: ParkingNode): Parking
     fScore: calculateDistance(start, goal),
     parent: null,
   };
-  
+
   openSet.push(startAStarNode);
   const allNodes: Map<string, AStarNode> = new Map();
   allNodes.set(start.id, startAStarNode);
 
   while (openSet.length > 0) {
-    
     openSet.sort((a, b) => a.fScore - b.fScore);
     const current = openSet.shift()!;
-    
-    
+
     if (current.node.id === goal.id) {
       const path: ParkingNode[] = [];
       let currentNode: AStarNode | null = current;
-      
+
       while (currentNode) {
         path.unshift(currentNode.node);
         currentNode = currentNode.parent;
       }
-      
+
       return path;
     }
-    
+
     closedSet.add(current.node.id);
-    
-   
-    const neighbors = parkingEdges[current.node.id] || [];
-    
+
+    const neighbors = edges[current.node.id] || [];
+
     for (const neighborId of neighbors) {
       if (closedSet.has(neighborId)) {
         continue;
       }
-      
-      const neighborNode = getNodeById(neighborId);
+
+      const neighborNode = getNodeByIdLocal(neighborId);
       if (!neighborNode) {
         continue;
       }
-      
+
       const tentativeGScore = current.gScore + calculateDistance(current.node, neighborNode);
-      
+
       let neighborAStarNode = allNodes.get(neighborId);
-      
+
       if (!neighborAStarNode) {
         neighborAStarNode = {
           node: neighborNode,
@@ -84,21 +88,41 @@ export const findShortestPath = (start: ParkingNode, goal: ParkingNode): Parking
         };
         allNodes.set(neighborId, neighborAStarNode);
       }
-      
+
       if (tentativeGScore < neighborAStarNode.gScore) {
         neighborAStarNode.parent = current;
         neighborAStarNode.gScore = tentativeGScore;
         neighborAStarNode.fScore = tentativeGScore + neighborAStarNode.hScore;
-        
+
         if (!openSet.includes(neighborAStarNode)) {
           openSet.push(neighborAStarNode);
         }
       }
     }
   }
-  
- 
+
   return [];
+};
+
+export const findShortestPath = (start: ParkingNode, goal: ParkingNode): ParkingNode[] => {
+  return findShortestPathOnGraph(start, goal, parkingEdges, getNodeById);
+};
+
+const nowMs = () => {
+  if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+    return performance.now();
+  }
+  return Date.now();
+};
+
+export const findShortestPathWithStats = (
+  start: ParkingNode,
+  goal: ParkingNode
+): { path: ParkingNode[]; durationMs: number } => {
+  const t0 = nowMs();
+  const path = findShortestPath(start, goal);
+  const t1 = nowMs();
+  return { path, durationMs: t1 - t0 };
 };
 
 type Heading = 'north' | 'east' | 'south' | 'west';

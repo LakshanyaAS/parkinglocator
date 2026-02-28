@@ -1,46 +1,54 @@
-// hooks/useSensors.ts
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
-import { Accelerometer } from 'expo-sensors';
+import { Accelerometer, Magnetometer } from 'expo-sensors';
+import { KalmanFilter } from '@/utils/KalmanFilter';
 
-interface Offset {
-  x: number;
-  y: number;
-}
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 export function useRealSensors() {
-  const [heading, setHeading] = useState(0); // device rotation in degrees
-  const [userOffset, setUserOffset] = useState<Offset>({ x: 0, y: 0 });
+  const [heading, setHeading] = useState(0);
+  const [stepCount, setStepCount] = useState(0);
+  const [stepLengthMeters, setStepLengthMeters] = useState(0.7);
+
+  const headingKalman = useRef(new KalmanFilter(0.01, 3)).current;
+
+  const avgMagnitude = useRef(1);
+  const lastStepTime = useRef(0);
 
   useEffect(() => {
-    // --- Web fallback ---
-    if (Platform.OS === 'web') {
-      // simulate movement with small random offsets
-      const interval = setInterval(() => {
-        setUserOffset(prev => ({
-          x: prev.x + (Math.random() - 0.5) * 2,
-          y: prev.y + (Math.random() - 0.5) * 2,
-        }));
-      }, 200);
-      return () => clearInterval(interval);
-    }
+    if (Platform.OS === 'web') return;
 
-    // --- Native accelerometer subscription ---
-    const subscription = Accelerometer.addListener(({ x, y }) => {
-      const speed = 8; // adjust for sensitivity
-      setUserOffset(prev => ({
-        x: prev.x + x * speed,
-        y: prev.y + y * speed,
-      }));
-      setHeading(Math.atan2(y, x) * (180 / Math.PI));
+    const magSub = Magnetometer.addListener(({ x, y }) => {
+      const rawAngle = (Math.atan2(y, x) * (180 / Math.PI) + 360) % 360;
+      const smoothHeading = headingKalman.filter(rawAngle);
+      setHeading(smoothHeading);
     });
+    Magnetometer.setUpdateInterval(80);
 
-    Accelerometer.setUpdateInterval(200);
+    const accSub = Accelerometer.addListener(({ x, y, z }) => {
+      const magnitude = Math.sqrt(x * x + y * y + z * z);
+      avgMagnitude.current = avgMagnitude.current * 0.9 + magnitude * 0.1;
+
+      const dynamicDelta = magnitude - avgMagnitude.current;
+      const now = Date.now();
+      const cooldownMs = 320;
+      const threshold = 0.14;
+
+      if (dynamicDelta > threshold && now - lastStepTime.current > cooldownMs) {
+        lastStepTime.current = now;
+
+        const estimated = clamp(0.6 + dynamicDelta * 1.1, 0.45, 0.9);
+        setStepLengthMeters(estimated);
+        setStepCount((prev) => prev + 1);
+      }
+    });
+    Accelerometer.setUpdateInterval(40);
 
     return () => {
-      subscription && subscription.remove();
+      magSub.remove();
+      accSub.remove();
     };
-  }, []);
+  }, [headingKalman]);
 
-  return { heading, userOffset };
+  return { heading, stepCount, stepLengthMeters };
 }
